@@ -117,7 +117,8 @@ export class CalendarManager {
                     interactive: true,
                     scopes: [
                         'https://www.googleapis.com/auth/calendar.readonly',
-                        'https://www.googleapis.com/auth/tasks'
+                        'https://www.googleapis.com/auth/tasks',
+                        'https://www.googleapis.com/auth/drive.appdata'
                     ]
                 }, (token) => {
                     if (chrome.runtime.lastError) {

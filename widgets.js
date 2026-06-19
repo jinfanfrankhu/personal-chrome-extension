@@ -2,6 +2,8 @@
  * Widget Manager - Handles customizable widget boxes with Graph and Heatmap types
  */
 
+import { DriveSync } from './sync.js';
+
 const COLORS = {
     blue:  { hex: '#286DC0', dark: '#1a5ca0' },
     green: { hex: '#2d7a4f', dark: '#1e5c3a' },
@@ -16,6 +18,7 @@ export class WidgetManager {
         this.panel = null;
         this.addBtn = null;
         this.boxMap = {}; // id -> DOM element
+        this.driveSync = new DriveSync();
     }
 
     async init() {
@@ -53,6 +56,15 @@ export class WidgetManager {
 
         document.addEventListener('trackerShown', () => this.scrollHeatmapsToToday());
         this.scrollHeatmapsToToday();
+
+        // Background Drive pull — if remote is newer, overwrite local and re-render
+        this.driveSync.pull().then(async remote => {
+            if (!remote?.lastModified) return;
+            const { widget_sync_ts: localTs } = await chrome.storage.local.get(['widget_sync_ts']);
+            if (remote.lastModified <= (localTs || 0)) return;
+            await this._applyRemoteData(remote);
+            await this._rerender();
+        }).catch(() => {});
     }
 
     createBoxElement() {
@@ -81,6 +93,7 @@ export class WidgetManager {
 
     async saveWidget(index, data) {
         await chrome.storage.local.set({ [this.WIDGET_KEY_PREFIX + index]: data });
+        this._gatherAndSync();
     }
 
     async deleteWidget(index) {
@@ -94,6 +107,55 @@ export class WidgetManager {
         const box = this.boxMap[id];
         if (box && box.parentNode) box.parentNode.removeChild(box);
         delete this.boxMap[id];
+        this._gatherAndSync();
+    }
+
+    // ── Drive Sync ────────────────────────────────────────────────────────────
+
+    // Reads all current widget state from local storage and pushes to Drive.
+    // Called fire-and-forget after every local write.
+    async _gatherAndSync() {
+        try {
+            const ids = await this.loadIds();
+            const widgets = {};
+            for (const id of ids) {
+                const data = await this.loadWidget(id);
+                if (data) widgets[id] = data;
+            }
+            const bundle = { lastModified: Date.now(), ids, widgets };
+            await chrome.storage.local.set({ widget_sync_ts: bundle.lastModified });
+            this.driveSync.push(bundle);
+        } catch { /* silent */ }
+    }
+
+    // Writes a remote bundle into local storage.
+    async _applyRemoteData(remote) {
+        const toSet = { widget_sync_ts: remote.lastModified };
+        if (Array.isArray(remote.ids)) toSet[WIDGET_IDS_KEY] = remote.ids;
+        for (const [id, data] of Object.entries(remote.widgets || {})) {
+            toSet[this.WIDGET_KEY_PREFIX + id] = data;
+        }
+        await chrome.storage.local.set(toSet);
+    }
+
+    // Clears and re-renders all widget boxes from local storage.
+    async _rerender() {
+        for (const id of Object.keys(this.boxMap)) {
+            const box = this.boxMap[id];
+            if (box?.parentNode) box.parentNode.removeChild(box);
+        }
+        this.boxMap = {};
+        const ids = await this.loadIds();
+        for (const id of ids) {
+            const data = await this.loadWidget(id);
+            if (data) {
+                const box = this.createBoxElement();
+                this.panel.insertBefore(box, this.addBtn);
+                this.boxMap[id] = box;
+                this.renderBox(box, id, data);
+            }
+        }
+        this.scrollHeatmapsToToday();
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
