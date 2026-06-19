@@ -1141,6 +1141,20 @@ ntp-shortcut,
     border-color: var(--widget-accent, #286DC0);
 }
 
+.graph-toggle-group {
+    display: flex;
+    margin-left: auto;
+}
+
+.graph-toggle-group .graph-ma-btn:first-child {
+    border-radius: 4px 0 0 4px;
+}
+
+.graph-toggle-group .graph-ma-btn:last-child {
+    border-radius: 0 4px 4px 0;
+    border-left: none;
+}
+
 .graph-ma-btn {
     font-size: 0.65rem;
     padding: 2px 6px;
@@ -1149,7 +1163,6 @@ ntp-shortcut,
     background: transparent;
     cursor: pointer;
     color: #888;
-    margin-left: auto;
     transition: all 0.15s;
 }
 

@@ -286,7 +286,7 @@ export class WidgetManager {
 
         const maBtn = document.createElement('button');
         maBtn.className = 'graph-ma-btn' + (data.showMovingAvg ? ' graph-ma-btn--active' : '');
-        maBtn.textContent = '7D avg';
+        maBtn.textContent = '7D';
         maBtn.title = 'Toggle 7-day moving average';
         maBtn.addEventListener('click', async () => {
             const fresh = await this.loadWidget(index);
@@ -295,15 +295,32 @@ export class WidgetManager {
             this.renderGraph(box, index, fresh);
         });
 
+        const ptsBtn = document.createElement('button');
+        const showPoints = data.showPoints !== false; // default on
+        ptsBtn.className = 'graph-ma-btn' + (showPoints ? ' graph-ma-btn--active' : '');
+        ptsBtn.textContent = 'Pts';
+        ptsBtn.title = 'Toggle data points';
+        ptsBtn.addEventListener('click', async () => {
+            const fresh = await this.loadWidget(index);
+            fresh.showPoints = fresh.showPoints === false ? true : false;
+            await this.saveWidget(index, fresh);
+            this.renderGraph(box, index, fresh);
+        });
+
+        const toggleGroup = document.createElement('div');
+        toggleGroup.className = 'graph-toggle-group';
+        toggleGroup.appendChild(maBtn);
+        toggleGroup.appendChild(ptsBtn);
+
         rangeRow.appendChild(rangeLabel);
         rangeRow.appendChild(rangeInput);
         rangeRow.appendChild(rangeSuffix);
-        rangeRow.appendChild(maBtn);
+        rangeRow.appendChild(toggleGroup);
 
         // Chart
         const chartArea = document.createElement('div');
         chartArea.className = 'graph-chart-area';
-        chartArea.appendChild(this.buildSVGChart(data.entries || [], data.range, index, box, data.color, data.showMovingAvg));
+        chartArea.appendChild(this.buildSVGChart(data.entries || [], data.range, index, box, data.color, data.showMovingAvg, data.showPoints !== false));
 
         // Add entry button
         const addBtn = document.createElement('button');
@@ -318,7 +335,7 @@ export class WidgetManager {
         box.appendChild(inner);
     }
 
-    buildSVGChart(entries, range, index, box, colorKey, showMovingAvg) {
+    buildSVGChart(entries, range, index, box, colorKey, showMovingAvg, showPoints = true) {
         const accent = (COLORS[colorKey] || COLORS.blue).hex;
         const accentDark = (COLORS[colorKey] || COLORS.blue).dark;
 
@@ -394,7 +411,7 @@ export class WidgetManager {
             svg.appendChild(lbl);
         });
 
-        if (filtered.length > 1) {
+        if (showPoints && filtered.length > 1) {
             const pts = filtered.map(e => `${toX(new Date(e.ts).getTime())},${toY(e.value)}`).join(' ');
             svg.appendChild(mk('polyline', { points: pts, stroke: accent, 'stroke-width': '1.5', fill: 'none', 'stroke-linejoin': 'round' }));
         }
@@ -475,7 +492,7 @@ export class WidgetManager {
             svg.appendChild(maHit);
         }
 
-        filtered.forEach(entry => {
+        if (showPoints) filtered.forEach(entry => {
             const circle = mk('circle', {
                 cx: toX(new Date(entry.ts).getTime()),
                 cy: toY(entry.value),
