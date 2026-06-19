@@ -16,6 +16,7 @@
     "https://www.deepmind.com/*",
     "https://arstechnica.com/*",
     "https://thegradient.pub/*",
+    "https://quantocracy.com/*",
     "https://www.googleapis.com/*"
   ],
   "oauth2": {
