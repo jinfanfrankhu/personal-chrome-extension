@@ -23,7 +23,8 @@ tasks.js                TasksManager — Google Tasks CRUD
 progress-tracker.js     ProgressTrackerManager — toggles panel vs. countdown/calendar view
 widgets.js              WidgetManager — graph + heatmap widgets with dynamic slots
 sync.js                 DriveSync — silent Google Drive appDataFolder read/write
-manifest.json           Extension config, permissions, OAuth client ID
+config.js               Per-device secrets (GITHUB_PAT, GITHUB_USERNAME) — .gitignored
+manifest.json           Extension config, permissions, OAuth client ID — skip-worktree (see below)
 ```
 
 ### Module dependency graph
@@ -95,6 +96,9 @@ Widget slots are **not** fixed. A `widget_ids` array in storage tracks active wi
 ### Heatmap grid
 27 weeks (current week + 26 prior), 7 rows (Sun-Sat). Cells are clickable to toggle `activeDays`. The grid scrolls horizontally; `scrollHeatmapsToToday()` auto-scrolls to the right edge on load.
 
+### GitHub heatmap widget
+A read-only heatmap populated from the GitHub GraphQL API (`contributionsCollection`). Uses a fine-grained PAT from `config.js`. Contributions are cached for 15 minutes (`github_contributions_cache`). Cells show 4 intensity levels based on contribution count relative to the max. Has a refresh button (↻) to force re-fetch.
+
 ### Graph chart
 Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day moving average overlay, data point toggles, and right-click-to-delete entries.
 
@@ -118,6 +122,7 @@ Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day movi
 | `widget_ids` | `number[]` — ordered list of active widget IDs |
 | `widget_{id}` | Widget data object (graph or heatmap shape above) |
 | `widget_sync_ts` | `number` — last Drive sync timestamp |
+| `github_contributions_cache` | `{ data: { "YYYY-MM-DD": count, ... }, timestamp }` |
 
 ---
 
@@ -134,9 +139,13 @@ Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day movi
 
 **Manifest permissions:** `storage`, `identity`
 
-**Host permissions:** venturebeat.com, huggingface.co, alignmentforum.org, openai.com, deepmind.google, deepmind.com, arstechnica.com, thegradient.pub, quantocracy.com, googleapis.com
+**Host permissions:** venturebeat.com, huggingface.co, alignmentforum.org, openai.com, deepmind.google, deepmind.com, arstechnica.com, thegradient.pub, quantocracy.com, googleapis.com, api.github.com
 
 **OAuth scopes:** `calendar.readonly`, `tasks`, `drive.appdata`
+
+| GitHub GraphQL API | WidgetManager | Fetch contribution data for GitHub heatmap |
+
+**GitHub PAT:** Stored in `config.js` (gitignored). Uses a fine-grained PAT with no special permissions — default read-only access is sufficient to query your own `contributionsCollection` (includes private contributions).
 
 ---
 
@@ -152,6 +161,36 @@ VentureBeat AI, Hugging Face, AI Alignment Forum, OpenAI, Google DeepMind, Ars T
 - **Background:** White body, warm beige cards (`rgba(245, 240, 232, 0.95)`)
 - `styles.css` is organized by clear comment-header sections: base, calendar-bar, countdown, modals, news, tasks, progress bar, widget system, graph widget, heatmap widget, widget modal, widget colors
 - Responsive breakpoint at 768px: calendar-bar collapses to single column, widget panel to 2-column grid
+
+---
+
+## Per-Device Files
+
+Two files have per-device values and are excluded from normal git tracking:
+
+- **`manifest.json`** — has `skip-worktree` set because `oauth2.client_id` differs per device. The repo version is a template; each device keeps its own local copy.
+- **`config.js`** — `.gitignore`d. Contains `GITHUB_PAT` and `GITHUB_USERNAME`.
+
+### Setting up a new device after `git pull`
+
+```bash
+# 1. manifest.json arrives from the repo — edit the oauth2.client_id to this device's value, then:
+git update-index --skip-worktree manifest.json
+
+# 2. Create config.js (gitignored, won't exist after clone):
+# Export GITHUB_PAT and GITHUB_USERNAME with this device's values.
+```
+
+### Pulling updates when skip-worktree is active
+
+```bash
+git update-index --no-skip-worktree manifest.json
+git stash push -m "local manifest" -- manifest.json
+git pull --rebase origin main
+git stash pop                       # resolve conflicts if any
+git add manifest.json && git reset HEAD -- manifest.json
+git update-index --skip-worktree manifest.json
+```
 
 ---
 
