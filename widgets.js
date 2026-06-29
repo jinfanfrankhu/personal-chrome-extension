@@ -3,6 +3,7 @@
  */
 
 import { DriveSync } from './sync.js';
+import { GITHUB_PAT, GITHUB_USERNAME } from './config.js';
 
 const COLORS = {
     blue:  { hex: '#286DC0', dark: '#1a5ca0' },
@@ -171,6 +172,8 @@ export class WidgetManager {
             this.renderGraph(box, index, data);
         } else if (data.type === 'heatmap') {
             this.renderHeatmap(box, index, data);
+        } else if (data.type === 'github-heatmap') {
+            this.renderGithubHeatmap(box, index, data);
         }
     }
 
@@ -194,6 +197,11 @@ export class WidgetManager {
                         <span class="widget-type-icon">🟦</span>
                         <span class="widget-type-name">Heatmap</span>
                         <span class="widget-type-desc">Daily activity grid</span>
+                    </button>
+                    <button class="widget-type-btn" data-type="github-heatmap">
+                        <span class="widget-type-icon">🐙</span>
+                        <span class="widget-type-name">GitHub</span>
+                        <span class="widget-type-desc">GitHub contribution heatmap</span>
                     </button>
                 </div>
                 <div class="widget-type-color-row">
@@ -228,13 +236,18 @@ export class WidgetManager {
                 this.panel.insertBefore(box, this.addBtn);
                 this.boxMap[newId] = box;
 
-                const data = type === 'graph'
-                    ? { type: 'graph', title: 'Metric', range: 30, entries: [], color: selectedColor }
-                    : { type: 'heatmap', title: 'Activity', activeDays: [], color: selectedColor };
+                let data;
+                if (type === 'graph') {
+                    data = { type: 'graph', title: 'Metric', range: 30, entries: [], color: selectedColor };
+                } else if (type === 'github-heatmap') {
+                    data = { type: 'github-heatmap', title: 'GitHub', activeDays: [], color: selectedColor };
+                } else {
+                    data = { type: 'heatmap', title: 'Activity', activeDays: [], color: selectedColor };
+                }
                 await this.saveWidget(newId, data);
                 document.body.removeChild(modal);
                 this.renderBox(box, newId, data);
-                if (type === 'heatmap') this.scrollHeatmapsToToday();
+                if (type === 'heatmap' || type === 'github-heatmap') this.scrollHeatmapsToToday();
             });
         });
 
@@ -757,6 +770,237 @@ export class WidgetManager {
                 cell.className = 'heatmap-cell';
                 cell.dataset.date = dateStr;
                 if (activeSet.has(dateStr)) cell.classList.add('heatmap-cell--active');
+                if (dateStr === todayStr) cell.classList.add('heatmap-cell--today');
+                weekCol.appendChild(cell);
+            });
+            weeksRow.appendChild(weekCol);
+        });
+
+        scrollInner.appendChild(monthRow);
+        scrollInner.appendChild(weeksRow);
+        scrollWrapper.appendChild(scrollInner);
+        outer.appendChild(dayLabels);
+        outer.appendChild(scrollWrapper);
+
+        return outer;
+    }
+
+    // ── GitHub Heatmap Widget ──────────────────────────────────────────────
+
+    async fetchGithubContributions() {
+        const cacheKey = 'github_contributions_cache';
+        const cached = await chrome.storage.local.get([cacheKey]);
+        if (cached[cacheKey]) {
+            const age = Date.now() - cached[cacheKey].timestamp;
+            if (age < 15 * 60 * 1000) return cached[cacheKey].data;
+        }
+
+        const today = new Date();
+        const from = new Date(today);
+        from.setDate(from.getDate() - 26 * 7 - today.getDay());
+        from.setHours(0, 0, 0, 0);
+
+        const query = `query {
+            user(login: "${GITHUB_USERNAME}") {
+                contributionsCollection(from: "${from.toISOString()}", to: "${today.toISOString()}") {
+                    contributionCalendar {
+                        weeks {
+                            contributionDays {
+                                date
+                                contributionCount
+                            }
+                        }
+                    }
+                }
+            }
+        }`;
+
+        const resp = await fetch('https://api.github.com/graphql', {
+            method: 'POST',
+            headers: {
+                'Authorization': `bearer ${GITHUB_PAT}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query }),
+        });
+
+        if (!resp.ok) throw new Error(`GitHub API ${resp.status}`);
+        const json = await resp.json();
+        const weeks = json.data.user.contributionsCollection.contributionCalendar.weeks;
+        const contributions = {};
+        for (const week of weeks) {
+            for (const day of week.contributionDays) {
+                if (day.contributionCount > 0) {
+                    contributions[day.date] = day.contributionCount;
+                }
+            }
+        }
+
+        await chrome.storage.local.set({
+            [cacheKey]: { data: contributions, timestamp: Date.now() }
+        });
+        return contributions;
+    }
+
+    renderGithubHeatmap(box, index, data) {
+        box.classList.add('tracker-box--heatmap');
+        box.innerHTML = '';
+
+        const inner = document.createElement('div');
+        inner.className = 'widget-inner';
+
+        const header = document.createElement('div');
+        header.className = 'widget-header';
+
+        const title = document.createElement('span');
+        title.className = 'widget-title';
+        title.textContent = data.title;
+        title.title = 'Click to rename';
+        title.addEventListener('click', () => this.makeEditableTitle(title, index, data));
+
+        const actions = document.createElement('div');
+        actions.className = 'widget-header-actions';
+
+        const colorBtn = document.createElement('button');
+        colorBtn.className = 'widget-color-btn';
+        colorBtn.style.background = (COLORS[data.color] || COLORS.green).hex;
+        colorBtn.title = 'Change color';
+        colorBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showColorPicker(inner, index, data, box); });
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'widget-reset-btn';
+        refreshBtn.textContent = '↻';
+        refreshBtn.title = 'Refresh contributions';
+        refreshBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await chrome.storage.local.remove(['github_contributions_cache']);
+            const fresh = await this.loadWidget(index);
+            if (fresh) this.renderGithubHeatmap(box, index, fresh);
+        });
+
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'widget-reset-btn';
+        resetBtn.textContent = '×';
+        resetBtn.title = 'Remove widget';
+        resetBtn.addEventListener('click', (e) => { e.stopPropagation(); this.confirmReset(box, index); });
+
+        actions.appendChild(colorBtn);
+        actions.appendChild(refreshBtn);
+        actions.appendChild(resetBtn);
+        header.appendChild(title);
+        header.appendChild(actions);
+
+        inner.appendChild(header);
+
+        const loading = document.createElement('div');
+        loading.className = 'github-heatmap-loading';
+        loading.textContent = 'Loading contributions…';
+        inner.appendChild(loading);
+        box.appendChild(inner);
+
+        this.fetchGithubContributions().then(contributions => {
+            loading.remove();
+            const activeDays = Object.keys(contributions);
+            data.activeDays = activeDays;
+            data._counts = contributions;
+            this.saveWidget(index, { ...data, activeDays });
+            inner.appendChild(this.buildGithubHeatmapGrid(contributions, index));
+            this.scrollHeatmapsToToday();
+        }).catch(err => {
+            loading.textContent = 'Failed to load — check PAT in config.js';
+            console.error('GitHub contributions fetch failed:', err);
+        });
+    }
+
+    buildGithubHeatmapGrid(contributions, index) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = this.dateToStr(today);
+
+        const dayOfWeek = today.getDay();
+        const currentSunday = new Date(today);
+        currentSunday.setDate(today.getDate() - dayOfWeek);
+
+        const startSunday = new Date(currentSunday);
+        startSunday.setDate(currentSunday.getDate() - 26 * 7);
+
+        const weeks = [];
+        const cursor = new Date(startSunday);
+        while (cursor <= currentSunday) {
+            const week = [];
+            for (let i = 0; i < 7; i++) {
+                week.push(this.dateToStr(new Date(cursor)));
+                cursor.setDate(cursor.getDate() + 1);
+            }
+            weeks.push(week);
+        }
+
+        const counts = Object.values(contributions);
+        const maxCount = Math.max(1, ...counts);
+
+        const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const CELL = 11, GAP = 2, COL = CELL + GAP;
+
+        const outer = document.createElement('div');
+        outer.className = 'heatmap-outer';
+
+        const dayLabels = document.createElement('div');
+        dayLabels.className = 'heatmap-day-labels';
+        ['S','M','T','W','T','F','S'].forEach(l => {
+            const s = document.createElement('span');
+            s.textContent = l;
+            dayLabels.appendChild(s);
+        });
+
+        const scrollWrapper = document.createElement('div');
+        scrollWrapper.className = 'heatmap-scroll-wrapper';
+
+        const scrollInner = document.createElement('div');
+        scrollInner.className = 'heatmap-scroll-inner';
+
+        const monthRow = document.createElement('div');
+        monthRow.className = 'heatmap-month-labels-row';
+
+        let prevMonth = -1, colCount = 0;
+        const monthSpans = [];
+        weeks.forEach(week => {
+            const m = new Date(week[0] + 'T00:00:00').getMonth();
+            if (m !== prevMonth) {
+                if (prevMonth !== -1) monthSpans.push({ label: MONTHS[prevMonth], cols: colCount });
+                prevMonth = m; colCount = 1;
+            } else {
+                colCount++;
+            }
+        });
+        if (prevMonth !== -1) monthSpans.push({ label: MONTHS[prevMonth], cols: colCount });
+
+        monthSpans.forEach(({ label, cols }) => {
+            const span = document.createElement('span');
+            span.className = 'heatmap-month-label';
+            span.textContent = label;
+            span.style.width = (cols * COL - GAP) + 'px';
+            monthRow.appendChild(span);
+        });
+
+        const weeksRow = document.createElement('div');
+        weeksRow.className = 'heatmap-weeks-row';
+
+        weeks.forEach(week => {
+            const weekCol = document.createElement('div');
+            weekCol.className = 'heatmap-week';
+            week.forEach(dateStr => {
+                const cell = document.createElement('div');
+                cell.className = 'heatmap-cell github-heatmap-cell';
+                cell.dataset.date = dateStr;
+                const count = contributions[dateStr] || 0;
+                if (count > 0) {
+                    const intensity = Math.min(count / maxCount, 1);
+                    const level = intensity < 0.25 ? 1 : intensity < 0.5 ? 2 : intensity < 0.75 ? 3 : 4;
+                    cell.classList.add(`github-level-${level}`);
+                    cell.title = `${dateStr}: ${count} contribution${count !== 1 ? 's' : ''}`;
+                } else {
+                    cell.title = `${dateStr}: no contributions`;
+                }
                 if (dateStr === todayStr) cell.classList.add('heatmap-cell--today');
                 weekCol.appendChild(cell);
             });

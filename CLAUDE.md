@@ -2,77 +2,104 @@
 
 ## Project Overview
 
-A Chrome Extension that replaces the new tab page with a personal dashboard featuring AI/tech news, Google Calendar events, Google Tasks, a countdown timer, a progress bar, and customizable widgets (graphs and heatmaps).
+A Chrome Extension (Manifest V3) that replaces the new tab page with a personal dashboard. Features: AI/tech news aggregation, Google Calendar events, Google Tasks, a countdown timer, a progress bar, and a slide-out widget panel with graphs and heatmaps. All widget data syncs to Google Drive for cross-device persistence.
 
-- **Manifest version:** V3
-- **Extension name:** AI & Tech News Homepage (v1.1)
-- **Entry point:** `newtab.html` (overrides Chrome's new tab)
+**Entry point:** `newtab.html` (overrides Chrome's new tab)
 
 ---
 
 ## Architecture
 
-Vanilla JavaScript with ES6 modules — no framework, no bundler, no build step.
+Vanilla JavaScript with ES6 modules — no framework, no bundler, no build step. Single-page app loaded via `<script type="module" src="script.js">`.
 
 ```
-newtab.html         UI structure (single page)
-script.js           Main orchestrator — initializes all managers in parallel
-styles.css          All styling (~1415 lines)
-news.js             News RSS aggregation
-calendar.js         Google Calendar integration
-countdown.js        Countdown timer + progress bar
-tasks.js            Google Tasks integration
-progress-tracker.js Toggle panel visibility manager
-widgets.js          Graph and heatmap widget rendering + data
+newtab.html             UI skeleton (single page)
+script.js               Orchestrator — creates all managers, inits them in parallel via Promise.all
+styles.css              All styling (~1478 lines, sectioned with comment headers)
+news.js                 NewsManager — RSS aggregation from 8 sources
+calendar.js             CalendarManager — Google Calendar OAuth + event display
+countdown.js            CountdownManager + ProgressBarManager (both exported)
+tasks.js                TasksManager — Google Tasks CRUD
+progress-tracker.js     ProgressTrackerManager — toggles panel vs. countdown/calendar view
+widgets.js              WidgetManager — graph + heatmap widgets with dynamic slots
+sync.js                 DriveSync — silent Google Drive appDataFolder read/write
+manifest.json           Extension config, permissions, OAuth client ID
 ```
+
+### Module dependency graph
+
+```
+script.js
+  ├── NewsManager            (standalone)
+  ├── CountdownManager       (standalone)
+  ├── ProgressBarManager     (standalone)
+  ├── CalendarManager        (standalone, provides OAuth tokens to others)
+  ├── TasksManager(calendar) (receives CalendarManager for shared token access)
+  ├── ProgressTrackerManager (standalone, toggles DOM visibility)
+  └── WidgetManager          (uses DriveSync internally)
+        └── DriveSync
+```
+
+`TasksManager` depends on `CalendarManager` — it calls `calendarManager.getTokenSilently()` and `calendarManager.isCalendarConnected()` for OAuth. The `calendarConnected` custom DOM event bridges the two when first connecting.
+
+### UI layout (calendar-bar)
+
+The `.calendar-bar` is a 2-column grid containing:
+- **Left:** Countdown section (timer + progress bar)
+- **Right:** Next Calendar Events section
+- **Full-width (hidden by default):** Progress Tracker Panel (widget grid)
+
+The `ProgressTrackerManager` toggle (`trackerToggleBtn`) swaps visibility: showing the panel hides the countdown and calendar sections, and vice versa. They occupy the same `.calendar-bar` container.
 
 ---
 
-## Features
+## Key Patterns
 
-### News Aggregator (`news.js`)
-- Aggregates RSS from 7 sources: VentureBeat AI, Hugging Face, AI Alignment Forum, OpenAI, Google DeepMind, Ars Technica, The Gradient
-- 15-minute cache via `chrome.storage.local` (`tech_content_cache`)
-- Parsed with native `DOMParser`
+### Manager class pattern
+Every feature is a self-contained ES6 class with an `async init()` method. `script.js` constructs all managers and calls `Promise.all([...init()])`. New features: create a manager class, import and init in `script.js`.
 
-### Google Calendar (`calendar.js`)
-- OAuth2 via Chrome Identity API
-- Shows next 2 upcoming events with smart date labels (Today/Tomorrow/weekday)
-- 15-minute cache (`calendar_cache`)
-- Silent token refresh
+### Caching pattern (15-min TTL)
+All API-backed features use the same cache flow:
+1. Check `chrome.storage.local` for cached data with timestamp
+2. If cache age < threshold (usually 5 min for display, 15 min hard expiry), use cached
+3. Otherwise fetch fresh data, store with `{ data/tasks/event, timestamp: Date.now() }`
 
-### Countdown Timer + Progress Bar (`countdown.js`)
-- Countdown to a user-set date with a custom title (default: "Days until End of Semester")
-- Progress bar (0–100%) editable by click
-- Both persisted to `chrome.storage.local`
+### OAuth flow
+Uses `chrome.identity.getAuthToken()` — `interactive: false` for silent refresh, `interactive: true` for first-time consent. CalendarManager owns the token; TasksManager borrows it.
 
-### Google Tasks (`tasks.js`)
-- Fetches up to 10 tasks from the primary task list
-- Smart due-date labels (Overdue / Due today / Due in X days)
-- Add tasks and mark complete with animations
-- 15-minute cache (`tasks_cache`)
+### Modal pattern
+Modals are created as a `div.modal-overlay` appended to `document.body`, with click-outside-to-close and Escape key support. Used by: countdown date picker, widget type selector, graph entry modal.
 
-### Progress Tracker Panel (`progress-tracker.js`, `widgets.js`)
-- Slide-out panel with 4 widget slots
-- **Graph widgets:** SVG line charts with 7D/30D/1Y range buttons
-- **Heatmap widgets:** GitHub-style 26-week activity grids with color themes (Blue/Green/Red)
-- Widgets support: rename, color change, add/delete entries, reset, delete
+### Widget color system
+Three color themes (blue/green/red) stored in widget data. Applied via CSS custom properties `--widget-accent` and `--widget-accent-dark` on each `.tracker-box`, which cascade to heatmap cells, graph lines, and toggle buttons.
 
 ---
 
-## APIs & Permissions
+## Widget System (widgets.js)
 
-| API | Usage |
-|-----|-------|
-| `chrome.storage.local` | All persistence (cache, settings, widget data) |
-| `chrome.identity` | OAuth2 token acquisition |
-| Google Calendar API v3 | Fetch calendar events |
-| Google Tasks API v1 | Fetch and update tasks |
-| RSS/XML (Fetch + DOMParser) | News aggregation |
+### Dynamic slot model
+Widget slots are **not** fixed. A `widget_ids` array in storage tracks active widget IDs (integers). Adding a widget picks `max(ids) + 1`; removing splices the ID out and deletes its storage key. The "+ Add Widget" button is always the last element in the panel.
 
-**`manifest.json` permissions:** `storage`, `identity`
+### Widget data shapes
 
-**OAuth scopes:** `https://www.googleapis.com/auth/calendar.readonly`, `https://www.googleapis.com/auth/tasks`
+**Graph widget:**
+```json
+{ "type": "graph", "title": "Metric", "range": 30, "entries": [{ "ts": "ISO", "value": 42 }], "color": "blue", "showMovingAvg": false, "showPoints": true }
+```
+
+**Heatmap widget:**
+```json
+{ "type": "heatmap", "title": "Activity", "activeDays": ["2025-06-15", "2025-06-16"], "color": "green" }
+```
+
+### Heatmap grid
+27 weeks (current week + 26 prior), 7 rows (Sun-Sat). Cells are clickable to toggle `activeDays`. The grid scrolls horizontally; `scrollHeatmapsToToday()` auto-scrolls to the right edge on load.
+
+### Graph chart
+Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day moving average overlay, data point toggles, and right-click-to-delete entries.
+
+### Google Drive sync (sync.js)
+`DriveSync` stores a `widgets.json` file in the hidden `appDataFolder` (invisible to user, scoped to this app). On init, `WidgetManager` does a background pull — if the remote `lastModified` timestamp is newer than local `widget_sync_ts`, it overwrites local data and re-renders. Every local write triggers a fire-and-forget push.
 
 ---
 
@@ -80,15 +107,51 @@ widgets.js          Graph and heatmap widget rendering + data
 
 | Key | Contents |
 |-----|----------|
-| `tech_content_cache` | Cached news articles |
-| `calendar_cache` | Cached calendar events |
-| `calendar_connected` | Boolean — calendar auth state |
-| `tasks_cache` | Cached task list |
-| `target_date` | Countdown target (ISO string) |
-| `target_title` | Countdown label |
-| `progress_bar_value` | Progress bar percentage (0–100) |
-| `tracker_panel_open` | Panel open/closed state |
-| `widget_0` – `widget_3` | Widget configs (type, data, color, title) |
+| `tech_content_cache` | `{ data: [...articles], timestamp }` |
+| `calendar_cache` | `{ event: [...events], timestamp }` |
+| `calendar_connected` | `boolean` — whether OAuth has been completed |
+| `tasks_cache` | `{ tasks: [...], listId, timestamp }` |
+| `target_date` | ISO string — countdown target |
+| `target_title` | string — countdown label |
+| `progress_bar_value` | number 0-100 |
+| `tracker_panel_open` | boolean — panel open/closed (saved but not currently restored on load) |
+| `widget_ids` | `number[]` — ordered list of active widget IDs |
+| `widget_{id}` | Widget data object (graph or heatmap shape above) |
+| `widget_sync_ts` | `number` — last Drive sync timestamp |
+
+---
+
+## APIs & Permissions
+
+| API | Used by | Purpose |
+|-----|---------|---------|
+| `chrome.storage.local` | All modules | Persistence for cache, settings, widget data |
+| `chrome.identity` | CalendarManager, TasksManager, DriveSync | OAuth2 token acquisition |
+| Google Calendar API v3 | CalendarManager | Fetch next 2 upcoming events |
+| Google Tasks API v1 | TasksManager | Fetch, add, and complete tasks |
+| Google Drive API v3 | DriveSync | Cross-device widget sync via appDataFolder |
+| RSS/XML (fetch + DOMParser) | NewsManager | News aggregation from 8 sources |
+
+**Manifest permissions:** `storage`, `identity`
+
+**Host permissions:** venturebeat.com, huggingface.co, alignmentforum.org, openai.com, deepmind.google, deepmind.com, arstechnica.com, thegradient.pub, quantocracy.com, googleapis.com
+
+**OAuth scopes:** `calendar.readonly`, `tasks`, `drive.appdata`
+
+---
+
+## RSS Sources
+
+VentureBeat AI, Hugging Face, AI Alignment Forum, OpenAI, Google DeepMind, Ars Technica AI, The Gradient, Quantocracy. Each source has fallback URLs. Up to 8 articles per source, top 20 overall by date. Hardcoded fallback articles if all feeds fail.
+
+---
+
+## Styling Notes
+
+- **Color scheme:** Yale Blue (`#00356B` primary, `#286DC0` accent)
+- **Background:** White body, warm beige cards (`rgba(245, 240, 232, 0.95)`)
+- `styles.css` is organized by clear comment-header sections: base, calendar-bar, countdown, modals, news, tasks, progress bar, widget system, graph widget, heatmap widget, widget modal, widget colors
+- Responsive breakpoint at 768px: calendar-bar collapses to single column, widget panel to 2-column grid
 
 ---
 
@@ -96,14 +159,17 @@ widgets.js          Graph and heatmap widget rendering + data
 
 No build step required.
 
-1. Go to `chrome://extensions/`
-2. Enable **Developer mode**
-3. Click **Load unpacked** → select this folder
-4. Reload the extension after making changes (`Ctrl+R` on the extensions page or the refresh button)
-5. Open a new tab to see changes
+1. `chrome://extensions/` -> Enable Developer mode -> Load unpacked -> select this folder
+2. After code changes: click the refresh icon on the extension card (or Ctrl+R on the extensions page)
+3. Open a new tab to see changes
 
-### Editing tips
-- CSS is organized in clearly labeled sections — find the relevant section before adding styles
-- Each feature is self-contained in its own JS module with a manager class
-- All caching follows the same pattern: check timestamp, fetch if stale, store with `Date.now()`
-- The `script.js` initializes all managers — add new managers there
+### Adding a new widget type
+1. Define the data shape (add to `showAddWidgetModal()` button list)
+2. Add a `renderNewType(box, index, data)` method in `WidgetManager`
+3. Add the type branch in `renderBox()`
+4. Add CSS in the appropriate section of `styles.css`
+
+### Adding a new feature module
+1. Create `feature.js` with an exported manager class and `async init()`
+2. Import in `script.js`, construct, and add to the `Promise.all` init array
+3. Add any needed HTML containers in `newtab.html`

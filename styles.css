@@ -1348,6 +1348,47 @@ ntp-shortcut,
     background: var(--widget-accent-dark, #1a5ca0);
 }
 
+/* ── GitHub Heatmap Widget ────────────────────────────────────────────────── */
+
+.github-heatmap-loading {
+    padding: 20px;
+    text-align: center;
+    color: #888;
+    font-size: 13px;
+}
+
+.github-heatmap-cell.github-level-1 {
+    background: color-mix(in srgb, var(--widget-accent, #286DC0) 25%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-2 {
+    background: color-mix(in srgb, var(--widget-accent, #286DC0) 50%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-3 {
+    background: color-mix(in srgb, var(--widget-accent, #286DC0) 75%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-4 {
+    background: var(--widget-accent, #286DC0);
+}
+
+.github-heatmap-cell.github-level-1:hover {
+    background: color-mix(in srgb, var(--widget-accent-dark, #1a5ca0) 30%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-2:hover {
+    background: color-mix(in srgb, var(--widget-accent-dark, #1a5ca0) 55%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-3:hover {
+    background: color-mix(in srgb, var(--widget-accent-dark, #1a5ca0) 80%, #e8e0d4);
+}
+
+.github-heatmap-cell.github-level-4:hover {
+    background: var(--widget-accent-dark, #1a5ca0);
+}
+
 /* ── Widget Type Selector Modal ───────────────────────────────────────────── */
 
 .widget-type-modal {
