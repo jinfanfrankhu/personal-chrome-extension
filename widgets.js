@@ -632,6 +632,39 @@ export class WidgetManager {
         this.renderGraph(box, index, data);
     }
 
+    // ── Heatmap Percentage Indicator ─────────────────────────────────────────
+
+    buildPercentageIndicator(activeDays) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const activeSet = new Set(activeDays);
+        let count = 0;
+        for (let i = 0; i < 30; i++) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            if (activeSet.has(this.dateToStr(d))) count++;
+        }
+        const pct = Math.round((count / 30) * 100);
+
+        const span = document.createElement('span');
+        span.className = 'heatmap-pct';
+        span.textContent = `${pct}%`;
+
+        if (pct >= 90) {
+            span.style.background = 'linear-gradient(90deg, #e74c3c, #e67e22, #f1c40f, #2ecc71, #3498db, #9b59b6)';
+            span.style.webkitBackgroundClip = 'text';
+            span.style.webkitTextFillColor = 'transparent';
+        } else if (pct >= 70) {
+            span.style.color = '#2ecc71';
+        } else if (pct >= 50) {
+            span.style.color = '#daa520';
+        } else {
+            span.style.color = '#e74c3c';
+        }
+
+        return span;
+    }
+
     // ── Heatmap Widget ────────────────────────────────────────────────────────
 
     renderHeatmap(box, index, data) {
@@ -665,6 +698,7 @@ export class WidgetManager {
         resetBtn.title = 'Remove widget';
         resetBtn.addEventListener('click', (e) => { e.stopPropagation(); this.confirmReset(box, index); });
 
+        actions.appendChild(this.buildPercentageIndicator(data.activeDays || []));
         actions.appendChild(colorBtn);
         actions.appendChild(resetBtn);
         header.appendChild(title);
@@ -760,6 +794,10 @@ export class WidgetManager {
             data.activeDays = Array.from(set);
             await this.saveWidget(index, data);
             cell.classList.toggle('heatmap-cell--active');
+            const widgetInner = cell.closest('.widget-inner');
+            const oldPct = widgetInner.querySelector('.heatmap-pct');
+            const newPct = this.buildPercentageIndicator(data.activeDays);
+            if (oldPct) oldPct.replaceWith(newPct);
         });
 
         weeks.forEach(week => {
@@ -904,6 +942,8 @@ export class WidgetManager {
             data.activeDays = activeDays;
             data._counts = contributions;
             this.saveWidget(index, { ...data, activeDays });
+            const pctEl = this.buildPercentageIndicator(activeDays);
+            actions.insertBefore(pctEl, colorBtn);
             inner.appendChild(this.buildGithubHeatmapGrid(contributions, index));
             this.scrollHeatmapsToToday();
         }).catch(err => {

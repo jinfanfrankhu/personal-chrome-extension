@@ -1348,6 +1348,17 @@ ntp-shortcut,
     background: var(--widget-accent-dark, #1a5ca0);
 }
 
+/* ── Heatmap Percentage Indicator ─────────────────────────────────────────── */
+
+.heatmap-pct {
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(245, 240, 232, 0.95);
+}
+
 /* ── GitHub Heatmap Widget ────────────────────────────────────────────────── */
 
 .github-heatmap-loading {
