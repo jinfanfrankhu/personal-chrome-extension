@@ -22,10 +22,20 @@ export class WidgetManager {
         this.boxMap = {}; // id -> DOM element
         this.driveSync = new DriveSync();
         this.oura = new OuraClient();
+        // Pushes to Drive are suppressed until the initial pull has reconciled, so a
+        // load-time render can't overwrite newer remote data with stale local data.
+        this._initialSyncDone = false;
     }
 
     async init() {
         this.panel = document.getElementById('progressTrackerPanel');
+
+        // Pull remote state BEFORE rendering or allowing any local write. The widget
+        // panel is hidden by default, so this brief wait is invisible — and it guarantees
+        // a cross-device edit is applied before a local render can push stale data over it.
+        await this._pullAndReconcile();
+        this._initialSyncDone = true;
+
         let ids = await this.loadIds();
 
         // On first load after upgrade, existing users may have empty slots — skip those
@@ -59,15 +69,6 @@ export class WidgetManager {
 
         document.addEventListener('trackerShown', () => this.scrollHeatmapsToToday());
         this.scrollHeatmapsToToday();
-
-        // Background Drive pull — if remote is newer, overwrite local and re-render
-        this.driveSync.pull().then(async remote => {
-            if (!remote?.lastModified) return;
-            const { widget_sync_ts: localTs } = await chrome.storage.local.get(['widget_sync_ts']);
-            if (remote.lastModified <= (localTs || 0)) return;
-            await this._applyRemoteData(remote);
-            await this._rerender();
-        }).catch(() => {});
     }
 
     createBoxElement() {
@@ -115,9 +116,32 @@ export class WidgetManager {
 
     // ── Drive Sync ────────────────────────────────────────────────────────────
 
+    // Pulls the remote bundle and, if it is newer than local, writes it into local
+    // storage. Runs once at init before any rendering. Falls back to local state on
+    // timeout/offline so the panel never hangs waiting on Drive.
+    async _pullAndReconcile() {
+        try {
+            const remote = await this._withTimeout(this.driveSync.pull(), 4000);
+            if (!remote?.lastModified) return;
+            const { widget_sync_ts: localTs } = await chrome.storage.local.get(['widget_sync_ts']);
+            if (remote.lastModified <= (localTs || 0)) return;
+            await this._applyRemoteData(remote);
+        } catch { /* offline or slow — fall back to whatever is in local storage */ }
+    }
+
+    _withTimeout(promise, ms) {
+        return Promise.race([
+            promise,
+            new Promise(resolve => setTimeout(() => resolve(null), ms)),
+        ]);
+    }
+
     // Reads all current widget state from local storage and pushes to Drive.
     // Called fire-and-forget after every local write.
     async _gatherAndSync() {
+        // Suppress pushes until the initial pull has reconciled, otherwise a load-time
+        // render could push stale local data over newer remote data.
+        if (!this._initialSyncDone) return;
         try {
             const ids = await this.loadIds();
             const widgets = {};
@@ -139,26 +163,6 @@ export class WidgetManager {
             toSet[this.WIDGET_KEY_PREFIX + id] = data;
         }
         await chrome.storage.local.set(toSet);
-    }
-
-    // Clears and re-renders all widget boxes from local storage.
-    async _rerender() {
-        for (const id of Object.keys(this.boxMap)) {
-            const box = this.boxMap[id];
-            if (box?.parentNode) box.parentNode.removeChild(box);
-        }
-        this.boxMap = {};
-        const ids = await this.loadIds();
-        for (const id of ids) {
-            const data = await this.loadWidget(id);
-            if (data) {
-                const box = this.createBoxElement();
-                this.panel.insertBefore(box, this.addBtn);
-                this.boxMap[id] = box;
-                this.renderBox(box, id, data);
-            }
-        }
-        this.scrollHeatmapsToToday();
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
@@ -1183,7 +1187,9 @@ export class WidgetManager {
             const activeDays = Object.keys(contributions);
             data.activeDays = activeDays;
             data._counts = contributions;
-            this.saveWidget(index, { ...data, activeDays });
+            // NOTE: do NOT saveWidget/sync here — GitHub contributions are re-fetched on
+            // every load and are not user data. Persisting them would bump widget_sync_ts
+            // and push on every new tab, clobbering real cross-device edits.
             const pctEl = this.buildPercentageIndicator(activeDays);
             actions.insertBefore(pctEl, colorBtn);
             inner.appendChild(this.buildGithubHeatmapGrid(contributions, index));

@@ -114,7 +114,11 @@ Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day movi
 A graph widget whose data auto-populates from the Oura API. Reuses `buildSVGChart()` (with `readOnly: true`), so it shares the same day-range / 7-day MA / points / color controls as the manual graph. A metric dropdown switches between Sleep Score (`daily_sleep.score`), Readiness (`daily_readiness.score`), and Steps (`daily_activity.steps`). First render shows a **Connect Oura** button that triggers interactive OAuth (must be a user gesture); afterward tokens refresh silently. A refresh (↻) button force-refetches. Widget storage holds config only — metric data is fetched live and cached in `oura_{metric}_cache` (15-min TTL), so it never enters the Drive sync bundle. Adding a metric later is a one-line addition to `OURA_METRICS` in `oura.js`.
 
 ### Google Drive sync (sync.js)
-`DriveSync` stores a `widgets.json` file in the hidden `appDataFolder` (invisible to user, scoped to this app). On init, `WidgetManager` does a background pull — if the remote `lastModified` timestamp is newer than local `widget_sync_ts`, it overwrites local data and re-renders. Every local write triggers a fire-and-forget push.
+`DriveSync` stores a `widgets.json` file in the hidden `appDataFolder` (invisible to user, scoped to this app). On init, `WidgetManager` **pulls before rendering** (`_pullAndReconcile`, with a 4s timeout fallback to local): if the remote `lastModified` is newer than local `widget_sync_ts`, it overwrites local storage, then renders. Every local write triggers a fire-and-forget push via `_gatherAndSync`.
+
+**Push gating (important):** `_gatherAndSync` is a no-op until `_initialSyncDone` is set (right after the initial pull). This prevents a load-time render from pushing stale local data over newer remote data. Because the widget panel is hidden by default, the blocking pull is imperceptible. The GitHub heatmap deliberately does **not** `saveWidget` after fetching — its contributions are re-fetched every load and are not user data, so persisting them would bump `widget_sync_ts` and push on every new tab, clobbering real cross-device edits.
+
+Sync is last-writer-wins keyed on wall-clock `lastModified`; concurrent edits on two devices will let the later save win.
 
 ---
 
