@@ -3,6 +3,7 @@
  */
 
 import { DriveSync } from './sync.js';
+import { OuraClient, OURA_METRICS } from './oura.js';
 import { GITHUB_PAT, GITHUB_USERNAME } from './config.js';
 
 const COLORS = {
@@ -20,6 +21,7 @@ export class WidgetManager {
         this.addBtn = null;
         this.boxMap = {}; // id -> DOM element
         this.driveSync = new DriveSync();
+        this.oura = new OuraClient();
     }
 
     async init() {
@@ -170,6 +172,8 @@ export class WidgetManager {
         box.style.setProperty('--widget-accent-dark', c.dark);
         if (data.type === 'graph') {
             this.renderGraph(box, index, data);
+        } else if (data.type === 'oura') {
+            this.renderOuraGraph(box, index, data);
         } else if (data.type === 'heatmap') {
             this.renderHeatmap(box, index, data);
         } else if (data.type === 'github-heatmap') {
@@ -202,6 +206,11 @@ export class WidgetManager {
                         <span class="widget-type-icon">🐙</span>
                         <span class="widget-type-name">GitHub</span>
                         <span class="widget-type-desc">GitHub contribution heatmap</span>
+                    </button>
+                    <button class="widget-type-btn" data-type="oura">
+                        <span class="widget-type-icon">💍</span>
+                        <span class="widget-type-name">Oura</span>
+                        <span class="widget-type-desc">Sleep, readiness & steps</span>
                     </button>
                 </div>
                 <div class="widget-type-color-row">
@@ -239,6 +248,8 @@ export class WidgetManager {
                 let data;
                 if (type === 'graph') {
                     data = { type: 'graph', title: 'Metric', range: 30, entries: [], color: selectedColor };
+                } else if (type === 'oura') {
+                    data = { type: 'oura', metric: 'sleep', title: OURA_METRICS.sleep.label, range: 30, color: selectedColor, showMovingAvg: false, showPoints: true };
                 } else if (type === 'github-heatmap') {
                     data = { type: 'github-heatmap', title: 'GitHub', activeDays: [], color: selectedColor };
                 } else {
@@ -410,7 +421,7 @@ export class WidgetManager {
         box.appendChild(inner);
     }
 
-    buildSVGChart(entries, range, index, box, colorKey, showMovingAvg, showPoints = true) {
+    buildSVGChart(entries, range, index, box, colorKey, showMovingAvg, showPoints = true, readOnly = false) {
         const accent = (COLORS[colorKey] || COLORS.blue).hex;
         const accentDark = (COLORS[colorKey] || COLORS.blue).dark;
 
@@ -573,11 +584,13 @@ export class WidgetManager {
                 cy: toY(entry.value),
                 r: '3', fill: accent, stroke: 'white', 'stroke-width': '1.5'
             });
-            circle.style.cursor = 'pointer';
+            circle.style.cursor = readOnly ? 'default' : 'pointer';
             const titleEl = document.createElementNS(ns, 'title');
-            titleEl.textContent = `${entry.value} — ${new Date(entry.ts).toLocaleDateString()} (right-click to delete)`;
+            titleEl.textContent = readOnly
+                ? `${entry.value} — ${new Date(entry.ts).toLocaleDateString()}`
+                : `${entry.value} — ${new Date(entry.ts).toLocaleDateString()} (right-click to delete)`;
             circle.appendChild(titleEl);
-            circle.addEventListener('contextmenu', (e) => {
+            if (!readOnly) circle.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 this.deleteEntry(index, entry.ts, box);
             });
@@ -630,6 +643,235 @@ export class WidgetManager {
         data.entries = (data.entries || []).filter(e => e.ts !== ts);
         await this.saveWidget(index, data);
         this.renderGraph(box, index, data);
+    }
+
+    // ── Oura Graph Widget ─────────────────────────────────────────────────────
+    // A graph whose data auto-populates from the Oura API. Reuses buildSVGChart
+    // so it shares the exact 7-day MA / points / color / range behaviour of the
+    // manual graph. Widget storage holds config only (no entries) — the API data
+    // is fetched live and cached per metric, so it never bloats the Drive bundle.
+
+    renderOuraGraph(box, index, data) {
+        box.classList.add('tracker-box--graph');
+        box.innerHTML = '';
+
+        const inner = document.createElement('div');
+        inner.className = 'widget-inner';
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'widget-header';
+
+        const title = document.createElement('span');
+        title.className = 'widget-title';
+        title.textContent = data.title;
+        title.title = 'Click to rename';
+        title.addEventListener('click', () => this.makeEditableTitle(title, index, data));
+
+        const actions = document.createElement('div');
+        actions.className = 'widget-header-actions';
+
+        const colorBtn = document.createElement('button');
+        colorBtn.className = 'widget-color-btn';
+        colorBtn.style.background = (COLORS[data.color] || COLORS.blue).hex;
+        colorBtn.title = 'Change color';
+        colorBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showColorPicker(inner, index, data, box); });
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'widget-reset-btn';
+        refreshBtn.textContent = '↻';
+        refreshBtn.title = 'Refresh from Oura';
+        refreshBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await chrome.storage.local.remove([`oura_${data.metric}_cache`]);
+            const fresh = await this.loadWidget(index);
+            if (fresh) this.renderOuraGraph(box, index, fresh);
+        });
+
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'widget-reset-btn';
+        resetBtn.textContent = '×';
+        resetBtn.title = 'Remove widget';
+        resetBtn.addEventListener('click', (e) => { e.stopPropagation(); this.confirmReset(box, index); });
+
+        actions.appendChild(colorBtn);
+        actions.appendChild(refreshBtn);
+        actions.appendChild(resetBtn);
+        header.appendChild(title);
+        header.appendChild(actions);
+
+        // Metric selector row
+        const metricRow = document.createElement('div');
+        metricRow.className = 'oura-metric-row';
+
+        const metricSelect = document.createElement('select');
+        metricSelect.className = 'oura-metric-select';
+        Object.entries(OURA_METRICS).forEach(([key, m]) => {
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = m.label;
+            if (key === data.metric) opt.selected = true;
+            metricSelect.appendChild(opt);
+        });
+        metricSelect.addEventListener('change', async () => {
+            const fresh = await this.loadWidget(index);
+            // Only auto-rename if the title still matches a metric label (i.e. not user-renamed).
+            const wasDefault = Object.values(OURA_METRICS).some(m => m.label === fresh.title);
+            fresh.metric = metricSelect.value;
+            if (wasDefault) fresh.title = OURA_METRICS[metricSelect.value].label;
+            await this.saveWidget(index, fresh);
+            this.renderOuraGraph(box, index, fresh);
+        });
+        metricRow.appendChild(metricSelect);
+
+        // Range + toggles row (same controls as the manual graph)
+        const rangeRow = document.createElement('div');
+        rangeRow.className = 'graph-range-row';
+
+        const rangeLabel = document.createElement('label');
+        rangeLabel.className = 'graph-range-label';
+        rangeLabel.textContent = 'Last';
+
+        const rangeInput = document.createElement('input');
+        rangeInput.type = 'number';
+        rangeInput.className = 'graph-range-input';
+        rangeInput.value = data.range || 30;
+        rangeInput.min = 1;
+        rangeInput.max = 3650;
+
+        const rangeSuffix = document.createElement('span');
+        rangeSuffix.className = 'graph-range-suffix';
+        rangeSuffix.textContent = 'days';
+
+        const commitRange = async () => {
+            const val = parseInt(rangeInput.value, 10);
+            if (isNaN(val) || val < 1) { rangeInput.value = data.range || 30; return; }
+            const fresh = await this.loadWidget(index);
+            fresh.range = val;
+            await this.saveWidget(index, fresh);
+            this.renderOuraGraph(box, index, fresh);
+        };
+        rangeInput.addEventListener('blur', commitRange);
+        rangeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rangeInput.blur(); });
+
+        const maBtn = document.createElement('button');
+        maBtn.className = 'graph-ma-btn' + (data.showMovingAvg ? ' graph-ma-btn--active' : '');
+        maBtn.textContent = '7D';
+        maBtn.title = 'Toggle 7-day moving average';
+        maBtn.addEventListener('click', async () => {
+            const fresh = await this.loadWidget(index);
+            fresh.showMovingAvg = !fresh.showMovingAvg;
+            await this.saveWidget(index, fresh);
+            this.renderOuraGraph(box, index, fresh);
+        });
+
+        const ptsBtn = document.createElement('button');
+        const showPoints = data.showPoints !== false;
+        ptsBtn.className = 'graph-ma-btn' + (showPoints ? ' graph-ma-btn--active' : '');
+        ptsBtn.textContent = 'Pts';
+        ptsBtn.title = 'Toggle data points';
+        ptsBtn.addEventListener('click', async () => {
+            const fresh = await this.loadWidget(index);
+            fresh.showPoints = fresh.showPoints === false ? true : false;
+            await this.saveWidget(index, fresh);
+            this.renderOuraGraph(box, index, fresh);
+        });
+
+        const toggleGroup = document.createElement('div');
+        toggleGroup.className = 'graph-toggle-group';
+        toggleGroup.appendChild(maBtn);
+        toggleGroup.appendChild(ptsBtn);
+
+        rangeRow.appendChild(rangeLabel);
+        rangeRow.appendChild(rangeInput);
+        rangeRow.appendChild(rangeSuffix);
+        rangeRow.appendChild(toggleGroup);
+
+        // Chart
+        const chartArea = document.createElement('div');
+        chartArea.className = 'graph-chart-area';
+
+        inner.appendChild(header);
+        inner.appendChild(metricRow);
+        inner.appendChild(rangeRow);
+        inner.appendChild(chartArea);
+        box.appendChild(inner);
+
+        this._populateOuraChart(chartArea, box, index, data);
+    }
+
+    // Fills the chart area based on auth state: config → connect → loading → chart.
+    async _populateOuraChart(chartArea, box, index, data) {
+        chartArea.innerHTML = '';
+
+        if (!this.oura.isConfigured()) {
+            const p = document.createElement('p');
+            p.className = 'graph-no-data';
+            p.textContent = 'Add Oura credentials to config.js';
+            chartArea.appendChild(p);
+            return;
+        }
+
+        if (!(await this.oura.isConnected())) {
+            const btn = document.createElement('button');
+            btn.className = 'oura-connect-btn';
+            btn.textContent = 'Connect Oura';
+            btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                btn.textContent = 'Connecting…';
+                try {
+                    await this.oura.connect();
+                    const fresh = await this.loadWidget(index);
+                    this.renderOuraGraph(box, index, fresh || data);
+                } catch (err) {
+                    console.error('Oura connect failed:', err);
+                    btn.disabled = false;
+                    btn.textContent = 'Connect Oura — retry';
+                    const msg = document.createElement('p');
+                    msg.className = 'graph-no-data';
+                    msg.style.color = '#c0392b';
+                    msg.style.wordBreak = 'break-word';
+                    msg.textContent = String(err.message || err);
+                    chartArea.appendChild(msg);
+                }
+            });
+            chartArea.appendChild(btn);
+            return;
+        }
+
+        const loading = document.createElement('p');
+        loading.className = 'graph-no-data';
+        loading.textContent = 'Loading…';
+        chartArea.appendChild(loading);
+
+        try {
+            const range = data.range || 30;
+            const entries = await this.fetchOuraMetric(data.metric, range);
+            chartArea.innerHTML = '';
+            chartArea.appendChild(
+                this.buildSVGChart(entries, range, index, box, data.color, data.showMovingAvg, data.showPoints !== false, true)
+            );
+        } catch (err) {
+            console.error('Oura fetch failed:', err);
+            chartArea.innerHTML = '';
+            const p = document.createElement('p');
+            p.className = 'graph-no-data';
+            p.textContent = 'Failed to load — click ↻ or reconnect';
+            chartArea.appendChild(p);
+        }
+    }
+
+    // Fetches a metric with a 15-min cache. Cache is reused only when it already
+    // spans at least the requested number of days.
+    async fetchOuraMetric(metric, days) {
+        const cacheKey = `oura_${metric}_cache`;
+        const cached = (await chrome.storage.local.get([cacheKey]))[cacheKey];
+        if (cached && (Date.now() - cached.timestamp) < 15 * 60 * 1000 && cached.days >= days) {
+            return cached.entries;
+        }
+        const entries = await this.oura.fetchMetric(metric, days);
+        await chrome.storage.local.set({ [cacheKey]: { entries, days, timestamp: Date.now() } });
+        return entries;
     }
 
     // ── Heatmap Percentage Indicator ─────────────────────────────────────────

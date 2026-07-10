@@ -23,7 +23,8 @@ tasks.js                TasksManager — Google Tasks CRUD
 progress-tracker.js     ProgressTrackerManager — toggles panel vs. countdown/calendar view
 widgets.js              WidgetManager — graph + heatmap widgets with dynamic slots
 sync.js                 DriveSync — silent Google Drive appDataFolder read/write
-config.js               Per-device secrets (GITHUB_PAT, GITHUB_USERNAME) — .gitignored
+oura.js                 OuraClient — Oura API v2 OAuth2 + metric fetching
+config.js               Per-device secrets (GITHUB_PAT, GITHUB_USERNAME, OURA_CLIENT_ID/SECRET) — .gitignored
 manifest.json           Extension config, permissions, OAuth client ID — skip-worktree (see below)
 ```
 
@@ -37,8 +38,9 @@ script.js
   ├── CalendarManager        (standalone, provides OAuth tokens to others)
   ├── TasksManager(calendar) (receives CalendarManager for shared token access)
   ├── ProgressTrackerManager (standalone, toggles DOM visibility)
-  └── WidgetManager          (uses DriveSync internally)
-        └── DriveSync
+  └── WidgetManager          (uses DriveSync + OuraClient internally)
+        ├── DriveSync
+        └── OuraClient
 ```
 
 `TasksManager` depends on `CalendarManager` — it calls `calendarManager.getTokenSilently()` and `calendarManager.isCalendarConnected()` for OAuth. The `calendarConnected` custom DOM event bridges the two when first connecting.
@@ -93,6 +95,12 @@ Widget slots are **not** fixed. A `widget_ids` array in storage tracks active wi
 { "type": "heatmap", "title": "Activity", "activeDays": ["2025-06-15", "2025-06-16"], "color": "green" }
 ```
 
+**Oura widget:**
+```json
+{ "type": "oura", "metric": "sleep", "title": "Sleep Score", "range": 30, "color": "blue", "showMovingAvg": false, "showPoints": true }
+```
+Stores config only — no `entries`. Data is fetched live from the Oura API and cached per metric (`oura_{metric}_cache`, 15-min TTL), so the Drive bundle stays small.
+
 ### Heatmap grid
 27 weeks (current week + 26 prior), 7 rows (Sun-Sat). Cells are clickable to toggle `activeDays`. The grid scrolls horizontally; `scrollHeatmapsToToday()` auto-scrolls to the right edge on load.
 
@@ -100,7 +108,10 @@ Widget slots are **not** fixed. A `widget_ids` array in storage tracks active wi
 A read-only heatmap populated from the GitHub GraphQL API (`contributionsCollection`). Uses a fine-grained PAT from `config.js`. Contributions are cached for 15 minutes (`github_contributions_cache`). Cells show 4 intensity levels based on contribution count relative to the max. Has a refresh button (↻) to force re-fetch.
 
 ### Graph chart
-Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day moving average overlay, data point toggles, and right-click-to-delete entries.
+Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day moving average overlay, data point toggles, and right-click-to-delete entries. A `readOnly` flag disables entry deletion (used by the Oura widget).
+
+### Oura widget (oura.js)
+A graph widget whose data auto-populates from the Oura API. Reuses `buildSVGChart()` (with `readOnly: true`), so it shares the same day-range / 7-day MA / points / color controls as the manual graph. A metric dropdown switches between Sleep Score (`daily_sleep.score`), Readiness (`daily_readiness.score`), and Steps (`daily_activity.steps`). First render shows a **Connect Oura** button that triggers interactive OAuth (must be a user gesture); afterward tokens refresh silently. A refresh (↻) button force-refetches. Widget storage holds config only — metric data is fetched live and cached in `oura_{metric}_cache` (15-min TTL), so it never enters the Drive sync bundle. Adding a metric later is a one-line addition to `OURA_METRICS` in `oura.js`.
 
 ### Google Drive sync (sync.js)
 `DriveSync` stores a `widgets.json` file in the hidden `appDataFolder` (invisible to user, scoped to this app). On init, `WidgetManager` does a background pull — if the remote `lastModified` timestamp is newer than local `widget_sync_ts`, it overwrites local data and re-renders. Every local write triggers a fire-and-forget push.
@@ -123,6 +134,8 @@ Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day movi
 | `widget_{id}` | Widget data object (graph or heatmap shape above) |
 | `widget_sync_ts` | `number` — last Drive sync timestamp |
 | `github_contributions_cache` | `{ data: { "YYYY-MM-DD": count, ... }, timestamp }` |
+| `oura_tokens` | `{ access_token, refresh_token, expires_at }` — Oura OAuth2 tokens |
+| `oura_{metric}_cache` | `{ entries: [{ts, value}], days, timestamp }` — per-metric API cache |
 
 ---
 
@@ -139,13 +152,17 @@ Pure SVG built in `buildSVGChart()`. Supports configurable day range, 7-day movi
 
 **Manifest permissions:** `storage`, `identity`
 
-**Host permissions:** venturebeat.com, huggingface.co, alignmentforum.org, openai.com, deepmind.google, deepmind.com, arstechnica.com, thegradient.pub, quantocracy.com, googleapis.com, api.github.com
+**Host permissions:** venturebeat.com, huggingface.co, alignmentforum.org, openai.com, deepmind.google, deepmind.com, arstechnica.com, thegradient.pub, quantocracy.com, googleapis.com, api.github.com, api.ouraring.com, cloud.ouraring.com
 
-**OAuth scopes:** `calendar.readonly`, `tasks`, `drive.appdata`
+**Google OAuth scopes:** `calendar.readonly`, `tasks`, `drive.appdata`
+**Oura OAuth scopes:** `daily`, `personal`
 
 | GitHub GraphQL API | WidgetManager | Fetch contribution data for GitHub heatmap |
+| Oura API v2 | OuraClient (via WidgetManager) | Fetch daily sleep / readiness / activity metrics |
 
 **GitHub PAT:** Stored in `config.js` (gitignored). Uses a fine-grained PAT with no special permissions — default read-only access is sufficient to query your own `contributionsCollection` (includes private contributions).
+
+**Oura OAuth2:** `OURA_CLIENT_ID` / `OURA_CLIENT_SECRET` in `config.js` (gitignored). Personal Access Tokens were deprecated (Dec 2025), so this uses the OAuth2 Authorization Code flow via `chrome.identity.launchWebAuthFlow`. Each device registers its own Redirect URI (`https://<extension-id>.chromiumapp.org/`) in the Oura developer portal; the client ID/secret are shared across devices. Tokens are stored in `oura_tokens` and refreshed silently.
 
 ---
 

@@ -1216,6 +1216,53 @@ ntp-shortcut,
     color: #286DC0;
 }
 
+/* ── Oura Widget ─────────────────────────────────────────────────────────── */
+
+.oura-metric-row {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-bottom: 2px;
+}
+
+.oura-metric-select {
+    font-size: 0.68rem;
+    padding: 2px 4px;
+    border: 1px solid #c5cfe0;
+    border-radius: 4px;
+    background: transparent;
+    color: #444;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.oura-metric-select:focus {
+    border-color: var(--widget-accent, #286DC0);
+}
+
+.oura-connect-btn {
+    font-size: 0.72rem;
+    margin: auto;
+    padding: 5px 12px;
+    border: 1px solid var(--widget-accent, #286DC0);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--widget-accent, #286DC0);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.oura-connect-btn:hover:not(:disabled) {
+    background: var(--widget-accent, #286DC0);
+    color: white;
+}
+
+.oura-connect-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 .widget-entry-input {
     width: 100%;
     padding: 10px;
