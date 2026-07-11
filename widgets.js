@@ -440,7 +440,7 @@ export class WidgetManager {
             return p;
         }
 
-        const PAD_L = 32, PAD_R = 10, PAD_T = 8, PAD_B = 18;
+        const PAD_L = 50, PAD_R = 10, PAD_T = 8, PAD_B = 18;
         const W = 280, H = 80;
         const chartW = W - PAD_L - PAD_R;
         const chartH = H - PAD_T - PAD_B;
@@ -483,7 +483,7 @@ export class WidgetManager {
             if (i > 0) {
                 svg.appendChild(mk('line', { x1: PAD_L, y1: y, x2: PAD_L + chartW, y2: y, stroke: '#f0f0f0', 'stroke-width': '1' }));
             }
-            const lbl = mk('text', { x: PAD_L - 3, y: y + 3, 'text-anchor': 'end', 'font-size': '7', fill: '#999' });
+            const lbl = mk('text', { x: PAD_L - 3, y: y + 3, 'text-anchor': 'end', 'font-size': '14', fill: '#999' });
             lbl.textContent = Number.isInteger(val) ? String(val) : val.toFixed(1);
             svg.appendChild(lbl);
         }
@@ -495,7 +495,7 @@ export class WidgetManager {
             const lbl = mk('text', {
                 x, y: H - 3,
                 'text-anchor': i === 0 && filtered.length > 1 ? 'start' : 'end',
-                'font-size': '7', fill: '#999'
+                'font-size': '14', fill: '#999'
             });
             lbl.textContent = `${d.getMonth() + 1}/${d.getDate()}`;
             svg.appendChild(lbl);
