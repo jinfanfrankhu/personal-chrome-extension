@@ -13,6 +13,10 @@ export class NewsManager {
             'AI Alignment Forum': [
                 'https://www.alignmentforum.org/feed.xml'
             ],
+            // No RSS feed on apolloresearch.ai — blog listing page is scraped instead.
+            'Apollo Research': [
+                'https://www.apolloresearch.ai/blog'
+            ],
             'OpenAI': [
                 'https://openai.com/news/rss.xml',
                 'https://openai.com/feed.xml'
@@ -125,7 +129,32 @@ export class NewsManager {
         }
 
         const xmlText = await response.text();
+        if (url.startsWith('https://www.apolloresearch.ai/')) {
+            return this.parseApolloBlogHTML(xmlText);
+        }
         return this.parseRSSXML(xmlText);
+    }
+
+    // Apollo Research's Webflow site has no RSS; parse its blog card grid.
+    parseApolloBlogHTML(htmlText) {
+        const doc = new DOMParser().parseFromString(htmlText, 'text/html');
+        const articles = [];
+        doc.querySelectorAll('.blog_card').forEach(card => {
+            const href = card.querySelector('a[href^="/blog/"]')?.getAttribute('href');
+            const title = card.querySelector('[fs-cmsfilter-field="name"]')?.textContent.trim();
+            const description = card.querySelector('[fs-cmsfilter-field="subtitle"]')?.textContent.trim() || '';
+            const dateText = card.querySelector('.blog_card-meta p')?.textContent.trim();
+            const date = dateText ? new Date(dateText) : null;
+            if (!href || !title) return;
+            articles.push({
+                title,
+                description,
+                link: new URL(href, 'https://www.apolloresearch.ai').href,
+                pubDate: date && !isNaN(date) ? date.toISOString() : '',
+                category: 'AI Safety'
+            });
+        });
+        return articles.slice(0, 12);
     }
 
     parseRSSXML(xmlText) {
